@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CanScan — Bluetooth</title>
+<style>
+body{font-family:sans-serif;background:#111;color:#eee;margin:16px;max-width:420px}
+h2,h3{margin:12px 0 4px}
+button{padding:10px 14px;margin:4px 2px;font-size:16px;border-radius:6px;border:0}
+.on{background:#0a7}.off{background:#333;color:#eee}
+#st{background:#222;border-radius:6px;padding:8px;white-space:pre-line}
+#err{background:#511;border-radius:6px;padding:8px;margin-top:6px}
+#note{color:#999;font-size:12px;margin-top:10px}
+.msg{display:flex;align-items:center;gap:8px;background:#222;border-radius:6px;padding:8px;margin:4px 0}
+.msg .lbl{flex:1}
+.msg .val{font-weight:bold;min-width:90px;text-align:right}
+.msg small{display:block;color:#999;font-size:11px}
+.sel{background:#0a7}
+</style>
+</head>
+<body>
+<h2>CanScan &mdash; afficheur 207</h2>
+<button id="bt" class="on">Connecter en Bluetooth</button>
+<div id="st">Non connect&eacute;.</div>
+<div id="err" hidden></div>
+<h3>Messages CAN &mdash; affichage OLED</h3>
+<div id="msgs"><small>Se connecter pour charger le catalogue du bo&icirc;tier.</small></div>
+<div id="note">Page Bluetooth uniquement : le t&eacute;l&eacute;phone reste sur son Wi-Fi
+(CarPlay&hellip;). Sur iPhone, l'ouvrir dans l'app <b>WebBLE</b> &mdash; Safari ne
+supporte pas le Bluetooth web.</div>
+<script>
+'use strict';
+let dev=null, chVals=null, chMode=null, msgs=[];
+const SVC=0xFFF0, CH_STAT=0xFFF1, CH_MODE=0xFFF2, CH_CAT=0xFFF3;
+const ERRS=[[1,'MCP2515 en erreur'],[2,'bus CAN muet'],[4,'bus CAN off'],
+            [8,'erreur passive'],[16,'tampon RX d&eacute;bord&eacute;'],[32,'warning']];
+const dec=new TextDecoder();
+
+async function connect(){
+  const st=document.getElementById('st');
+  try{
+    st.textContent='Demande de connexion\u2026';
+    dev=await navigator.bluetooth.requestDevice({filters:[{services:[SVC]}]});
+    dev.addEventListener('gattserverdisconnected', onDisc);
+    const g=await dev.gatt.connect();
+    const s=await g.getPrimaryService(SVC);
+    const cat=JSON.parse(dec.decode(await (await s.getCharacteristic(CH_CAT)).readValue()));
+    msgs=cat;
+    chMode=await s.getCharacteristic(CH_MODE);
+    chVals=await s.getCharacteristic(CH_STAT);
+    await chVals.startNotifications();
+    chVals.addEventListener('characteristicvaluechanged',
+      ev=>onStatus(JSON.parse(dec.decode(ev.target.value))));
+    st.textContent='Connect\u00e9. En attente du statut\u2026';
+  }catch(e){
+    st.textContent='Non connect\u00e9 ('+(e.message||e)+').';
+  }
+}
+
+function onDisc(){
+  document.getElementById('st').textContent='D&eacute;connect&eacute;.';
+  document.getElementById('err').hidden=true;
+}
+
+function onStatus(j){
+  const st=document.getElementById('st');
+  st.textContent='Connect\u00e9. CAN : '+(j.ok?'OK ('+j.fr+' trames, '+j.fps+'/s)':'aucune trame')+
+    (j.fp?'\nFlipper connect\u00e9':'');
+  const err=document.getElementById('err');
+  const errs=ERRS.filter(e=>j.e&e[0]).map(e=>e[1]);
+  err.hidden=!errs.length;
+  if(errs.length) err.innerHTML='\u26a0 Erreurs CAN : '+errs.join(' / ');
+  const v=j.v.split(';');
+  const rows=msgs.map(function(m,i){
+    const val=(i<v.length&&v[i]&&v[i]!=='--')?v[i]:'--';
+    return '<div class="msg'+(j.m==i?' sel':'')+'">'+
+      '<div class="lbl">'+m.l+'<small>'+(m.u||'')+'</small></div>'+
+      '<div class="val">'+val+'</div>'+
+      '<button class="'+(j.m==i?'sel on':'off')+'" onclick="setMode('+i+')">OLED</button></div>';
+  }).join('');
+  const alt=msgs.length;
+  document.getElementById('msgs').innerHTML=rows+
+    '<div class="msg'+(j.m==alt?' sel':'')+'"><div class="lbl">Alternance (tous les messages, 3 s)'+
+    '</div><button class="'+(j.m==alt?'sel on':'off')+'" onclick="setMode('+alt+')">OLED</button></div>';
+}
+
+async function setMode(m){
+  try{
+    if(chMode) await chMode.writeValue(new Uint8Array([m]));
+  }catch(e){ /* deconnexion : le bouton reverra */ }
+}
+
+const bt=document.getElementById('bt');
+bt.onclick=connect;
+if(!navigator.bluetooth){
+  bt.disabled=true;
+  document.getElementById('st').innerHTML=
+    'Ce navigateur ne supporte pas le Bluetooth web.<br>'+
+    '&bull; iPhone : installer l\'app <b>WebBLE</b> (App Store) et y charger cette page.<br>'+
+    '&bull; Android : ouvrir cette page dans Chrome.';
+}
+</script>
+</body>
+</html>
